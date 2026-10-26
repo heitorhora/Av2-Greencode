@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>greencode</title>
+<style>
+:root{--bg:#0f1a14;--card:#16251c;--line:#24382b;--tx:#e6f2ea;--mut:#8fa99a;--ac:#4ade80;--ac2:#22c55e;--err:#f87171;--warn:#fbbf24}
+@media (prefers-color-scheme:light){:root{--bg:#f2f7f3;--card:#fff;--line:#d5e3d9;--tx:#13261a;--mut:#5b7566;--ac:#15803d;--ac2:#166534;--err:#b91c1c;--warn:#b45309}}
+*{box-sizing:border-box}body{margin:0;font:15px system-ui,sans-serif;background:var(--bg);color:var(--tx)}
+button,input,select,textarea{font:inherit;color:inherit}
+.app{display:grid;grid-template-columns:220px 1fr;min-height:100vh}
+nav{background:var(--card);border-right:1px solid var(--line);padding:18px 12px;display:flex;flex-direction:column;gap:4px}
+nav h1{margin:0 0 14px 8px;font-size:20px;color:var(--ac)}nav a{padding:9px 12px;border-radius:8px;color:var(--mut);text-decoration:none;cursor:pointer}
+nav a.on,nav a:hover{background:var(--line);color:var(--tx)}nav .eu{margin-top:auto;font-size:13px;color:var(--mut);padding:8px}
+main{padding:24px;max-width:1100px;width:100%}
+h2{margin:0 0 16px}.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:14px}.grow{flex:1}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.big{font-size:30px;font-weight:700;color:var(--ac)}.mut{color:var(--mut);font-size:13px}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line)}th{font-size:12px;color:var(--mut);text-transform:uppercase}tr:last-child td{border:0}
+.btn{background:var(--ac2);color:#fff;border:0;border-radius:8px;padding:8px 14px;cursor:pointer}.btn.sec{background:transparent;border:1px solid var(--line);color:var(--tx)}.btn.sm{padding:4px 10px;font-size:13px}
+input,select,textarea{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
+label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
+.tag{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;background:var(--line)}.tag.ok{color:var(--ac)}.tag.off{color:var(--err)}
+.bar{height:10px;border-radius:5px;background:var(--line);overflow:hidden}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--ac2),var(--ac))}
+dialog{background:var(--card);color:var(--tx);border:1px solid var(--line);border-radius:14px;padding:22px;width:min(480px,92vw)}dialog::backdrop{background:#0008}
+#toast{position:fixed;bottom:18px;right:18px;display:flex;flex-direction:column;gap:8px}.t{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--ac);padding:10px 14px;border-radius:8px;max-width:340px}.t.e{border-left-color:var(--err)}
+.login{max-width:340px;margin:12vh auto}.tl{border-left:2px solid var(--line);padding-left:14px;margin-left:6px}.tl div{margin-bottom:12px}
+@media(max-width:760px){.app{grid-template-columns:1fr}nav{flex-direction:row;flex-wrap:wrap}nav .eu{margin:0}}
+</style>
+</head>
+<body>
+<div id="root"></div><div id="toast"></div><dialog id="dlg"></dialog>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const h = (s, ...v) => s.reduce((a, x, i) => a + x + (i < v.length ? (v[i]?.__raw ?? esc(v[i])) : ""), "");
+const raw = (s) => ({ __raw: s });
+const fmt = (d) => d ? new Date(d).toLocaleDateString("pt-BR", { timeZone: "UTC" }) : "—";
+const ESTADOS = ["Novo", "Bom", "Regular", "Ruim", "Inservível"];
+const PAPEIS = { ADMINISTRADOR: "Administrador", OPERADOR_CADASTRO: "Operador de cadastro", GESTOR_ALMOXARIFADO: "Gestor de almoxarifado", AUDITOR: "Auditor" };
+const STATUS_EQ = ["AGUARDANDO_TRIAGEM", "TRIADO", "DESMONTE", "RECICLAGEM", "DESCARTE_SEGURO"];
+const STATUS_LOTE = ["RECEBIDO", "EM_TRIAGEM", "TRIAGEM_CONCLUIDA", "FINALIZADO"];
+const TIPOS = ["TERMINAL_COMPUTADOR", "PERIFERICO", "EQUIPAMENTO_TELECOM"];
+const nome = (s) => s.replaceAll("_", " ").toLowerCase();
+const opts = (arr, sel, f = nome) => arr.map((x) => `<option value="${esc(x)}" ${x === sel ? "selected" : ""}>${esc(f(x))}</option>`).join("");
+
+let sessao = JSON.parse(localStorage.getItem("gc") || "null");
+
+function toast(msg, erro) {
+  const d = document.createElement("div"); d.className = "t" + (erro ? " e" : ""); d.textContent = msg;
+  $("#toast").append(d); setTimeout(() => d.remove(), 5000);
+}
+async function api(met, url, corpo) {
+  const r = await fetch("/api" + url, { method: met, headers: { "Content-Type": "application/json", ...(sessao ? { Authorization: "Bearer " + sessao.token } : {}) }, body: corpo ? JSON.stringify(corpo) : undefined });
+  if (r.status === 401 && sessao) { sair(); throw new Error("Sessão expirada."); }
+  const d = r.status === 204 ? null : await r.json();
+  if (!r.ok) throw new Error((d?.erros || ["Erro"]).join(" · "));
+  return d;
+}
+const tenta = (fn) => async (...a) => { try { await fn(...a); } catch (e) { toast(e.message, true); } };
+const sair = () => { localStorage.removeItem("gc"); sessao = null; render(); };
+const pode = (...d) => d.some((x) => sessao.permissoes.includes(x));
+
+// modal de formulario genérico: campos [{n,l,t,v,opts,req}] -> chama ok(valores)
+function form(titulo, campos, ok) {
+  const dlg = $("#dlg");
+  dlg.innerHTML = h`<h3>${titulo}</h3><form method="dialog">${raw(campos.map((c) => h`<label>${c.l}</label>` + (c.opts
+    ? `<select name="${c.n}">${c.opts}</select>`
+    : c.t === "area" ? `<textarea name="${c.n}">${esc(c.v)}</textarea>` : `<input name="${c.n}" type="${c.t || "text"}" value="${esc(c.v)}" ${c.req ? "required" : ""} ${c.ph ? `placeholder="${esc(c.ph)}"` : ""}>`)).join(""))}
+    <div class="row" style="margin-top:16px"><button class="btn">Salvar</button><button type="button" class="btn sec" onclick="dlg.close()">Cancelar</button></div></form>`;
+  dlg.querySelector("form").onsubmit = tenta(async (ev) => {
+    const v = Object.fromEntries(new FormData(ev.target)); await ok(v); dlg.close();
+  });
+  dlg.showModal();
+}
+
+const paginas = {
+  async painel() {
+    const p = await api("GET", "/painel");
+    const max = Math.max(1, ...Object.values(p.equipamentosPorStatus));
+    return h`<h2>Painel</h2><div class="cards">${raw([["Organizações", p.organizacoes], ["Lotes", p.lotes], ["Equipamentos", p.equipamentos], ["Usuários ativos", p.usuarios], ["Potencial médio", Math.round(p.potencialMedio * 100) + "%"]]
+      .map(([t, v]) => h`<div class="card"><div class="mut">${t}</div><div class="big">${v}</div></div>`).join(""))}</div>
+      <div class="card"><b>Equipamentos por etapa</b><div style="margin-top:12px;display:grid;gap:10px">${raw(STATUS_EQ.map((s) => h`<div><div class="row" style="margin:0 0 4px"><span class="grow">${nome(s)}</span><b>${p.equipamentosPorStatus[s] || 0}</b></div><div class="bar"><i style="width:${((p.equipamentosPorStatus[s] || 0) / max) * 100}%"></i></div></div>`).join(""))}</div></div>`;
+  },
+
+  async usuarios() {
+    const us = await api("GET", "/usuarios");
+    window.__us = us;
+    return h`<h2>Usuários</h2><div class="row"><button class="btn" onclick="novoUsuario()">Novo usuário</button></div>
+      <table><tr><th>Usuário</th><th>Nome</th><th>E-mail</th><th>Papel</th><th>Situação</th><th></th></tr>${raw(us.map((u, i) => h`<tr><td>${u.username}</td><td>${u.nome}</td><td>${u.email || "—"}</td><td>${PAPEIS[u.papel]}</td>
+      <td><span class="tag ${u.ativo ? "ok" : "off"}">${u.ativo ? "ativo" : "inativo"}</span></td><td><button class="btn sm sec" onclick="editarUsuario(${i})">Editar</button></td></tr>`).join(""))}</table>`;
+  },
+
+  async organizacoes() {
+    const os = await api("GET", "/organizacoes"); window.__os = os;
+    const w = pode("org");
+    return h`<h2>Organizações</h2>${raw(w ? `<div class="row"><button class="btn" onclick="novaOrg()">Nova organização</button></div>` : "")}
+      <table><tr><th>CNPJ</th><th>Razão social</th><th>Segmento</th><th>Contrato</th><th>Lotes</th><th></th></tr>${raw(os.map((o, i) => h`<tr><td>${o.cnpj}</td><td>${o.razaoSocial}</td><td>${o.segmento}</td>
+      <td>${o.contrato ? `${o.contrato.numero} (até ${fmt(o.contrato.vigenciaFim)})` : "—"}</td><td>${o._count.lotes}</td>
+      <td>${raw(w ? `<button class="btn sm sec" onclick="editarOrg(${i})">Editar</button> <button class="btn sm sec" onclick="removerOrg(${i})">Remover</button>` : "")}</td></tr>`).join(""))}</table>`;
+  },
+
+  async lotes() {
+    const ls = await api("GET", "/lotes"); window.__ls = ls;
+    return h`<h2>Lotes</h2>${raw(pode("lote") ? `<div class="row"><button class="btn" onclick="novoLote()">Novo lote</button></div>` : "")}
+      <table><tr><th>NF</th><th>Organização</th><th>Entrada</th><th>Status</th><th>Itens</th><th></th></tr>${raw(ls.map((l, i) => h`<tr><td>${l.notaFiscal}</td><td>${l.organizacao.razaoSocial}</td><td>${fmt(l.dataEntrada)}</td>
+      <td><span class="tag">${nome(l.status)}</span></td><td>${l._count.equipamentos}</td><td><button class="btn sm sec" onclick="verLote('${l.id}')">Abrir</button> ${raw(pode("lote") ? `<button class="btn sm sec" onclick="editarLote(${i})">Editar</button>` : "")}</td></tr>`).join(""))}</table>`;
+  },
+
+  async relatorio() {
+    const r = await api("GET", "/relatorios/potencial-recuperacao");
+    return h`<h2>Potencial de recuperação</h2><p class="mut">${r.total} equipamentos · média ${Math.round(r.potencialMedio * 100)}%</p>
+      <table><tr><th>Código</th><th>Tipo</th><th>Status</th><th>Potencial</th><th>Componentes</th></tr>${raw(r.itens.map((i) => h`<tr><td>${i.codigoBarrasInterno}</td><td>${nome(i.tipo)}</td><td>${nome(i.status)}</td>
+      <td style="width:150px"><div class="bar"><i style="width:${i.potencial * 100}%"></i></div></td><td class="mut">${i.componentes.join(", ")}</td></tr>`).join(""))}</table>`;
+  },
+
+  async auditoria() {
+    const a = await api("GET", "/auditoria?limite=200");
+    return h`<h2>Auditoria</h2><table><tr><th>Quando</th><th>Quem</th><th>Ação</th><th>Entidade</th><th>Detalhe</th></tr>${raw(a.map((x) => h`<tr><td>${new Date(x.criadoEm).toLocaleString("pt-BR")}</td><td>${x.usuario?.username || "—"}</td><td>${x.acao}</td><td>${x.entidade}</td><td class="mut">${x.detalhe ? JSON.stringify(x.detalhe) : ""}</td></tr>`).join(""))}</table>`;
+  },
+
+  async config() {
+    const c = await api("GET", "/config");
+    return h`<h2>Parâmetros globais</h2><div class="card" style="max-width:380px"><label>Alíquota de impostos (%)</label><input id="aliq" type="number" step="0.01" value="${c.aliquotaImpostos}">
+      <label>Depreciação anual (%)</label><input id="depr" type="number" step="0.01" value="${c.coeficienteDepreciacao}"><div class="row" style="margin-top:14px"><button class="btn" onclick="salvarConfig()">Salvar</button></div></div>`;
+  },
+
+  async perfil() {
+    const m = await api("GET", "/me"); window.__me = m;
+    return h`<h2>Meu perfil</h2><div class="card" style="max-width:380px"><div class="mut">${m.username} · ${PAPEIS[m.papel]}</div>
+      <label>Nome</label><input id="pn" value="${m.nome}"><label>E-mail</label><input id="pe" value="${m.email || ""}">
+      <label>Senha atual (só para trocar senha)</label><input id="ps" type="password"><label>Nova senha</label><input id="pns" type="password">
+      <div class="row" style="margin-top:14px"><button class="btn" onclick="salvarPerfil()">Salvar</button></div></div>`;
+  },
+};
+
+// ---------- ações ----------
+window.novoUsuario = () => form("Novo usuário", [
+  { n: "username", l: "Usuário", req: 1 }, { n: "nome", l: "Nome", req: 1 }, { n: "email", l: "E-mail", t: "email" },
+  { n: "senha", l: "Senha (8+, letras e números)", t: "password", req: 1 }, { n: "papel", l: "Papel", opts: opts(Object.keys(PAPEIS), "", (p) => PAPEIS[p]) },
+], async (v) => { await api("POST", "/usuarios", { ...v, email: v.email || null }); toast("Usuário criado."); render(); });
+
+window.editarUsuario = (i) => {
+  const u = __us[i];
+  form("Editar " + u.username, [
+    { n: "nome", l: "Nome", v: u.nome, req: 1 }, { n: "email", l: "E-mail", v: u.email, t: "email" },
+    { n: "papel", l: "Papel", opts: opts(Object.keys(PAPEIS), u.papel, (p) => PAPEIS[p]) },
+    { n: "ativo", l: "Situação", opts: `<option value="1" ${u.ativo ? "selected" : ""}>Ativo</option><option value="0" ${u.ativo ? "" : "selected"}>Inativo</option>` },
+    { n: "senha", l: "Nova senha (deixe vazio para manter)", t: "password" },
+  ], async (v) => {
+    const corpo = { versao: u.versao, nome: v.nome, email: v.email || null, papel: v.papel, ativo: v.ativo === "1" };
+    if (v.senha) corpo.senha = v.senha;
+    await api("PATCH", "/usuarios/" + u.id, corpo); toast("Usuário atualizado."); render();
+  });
+};
+
+const camposContrato = (c) => [
+  { n: "numero", l: "Nº do contrato (vazio = sem contrato)", v: c?.numero },
+  { n: "ini", l: "Vigência início", t: "date", v: c?.vigenciaInicio?.slice(0, 10) }, { n: "fim", l: "Vigência fim", t: "date", v: c?.vigenciaFim?.slice(0, 10) },
+];
+const contratoDe = (v) => v.numero ? { numero: v.numero, vigenciaInicio: v.ini, vigenciaFim: v.fim } : undefined;
+
+window.novaOrg = () => form("Nova organização", [{ n: "cnpj", l: "CNPJ", req: 1 }, { n: "razaoSocial", l: "Razão social", req: 1 }, { n: "segmento", l: "Segmento", req: 1, ph: "varejo, hospitalar..." }, ...camposContrato()],
+  async (v) => { await api("POST", "/organizacoes", { cnpj: v.cnpj, razaoSocial: v.razaoSocial, segmento: v.segmento, contrato: contratoDe(v) }); toast("Organização criada."); render(); });
+
+window.editarOrg = (i) => {
+  const o = __os[i];
+  form("Editar organização", [{ n: "razaoSocial", l: "Razão social", v: o.razaoSocial, req: 1 }, { n: "segmento", l: "Segmento", v: o.segmento, req: 1 }, ...camposContrato(o.contrato)],
+    async (v) => { await api("PATCH", "/organizacoes/" + o.id, { versao: o.versao, razaoSocial: v.razaoSocial, segmento: v.segmento, contrato: contratoDe(v) ?? null }); toast("Organização atualizada."); render(); });
+};
+window.removerOrg = tenta(async (i) => { const o = __os[i]; if (!confirm("Remover " + o.razaoSocial + "?")) return; await api("DELETE", "/organizacoes/" + o.id); toast("Removida."); render(); });
+
+window.novoLote = async () => {
+  const os = await api("GET", "/organizacoes");
+  form("Novo lote", [
+    { n: "organizacaoId", l: "Organização", opts: opts(os.map((o) => o.id), "", (id) => os.find((o) => o.id === id).razaoSocial) },
+    { n: "notaFiscal", l: "Nota fiscal", req: 1 }, { n: "transportadora", l: "Transportadora", req: 1 },
+    { n: "dataEntrada", l: "Data de entrada", t: "date", v: new Date().toISOString().slice(0, 10), req: 1 },
+    { n: "itens", l: "Equipamentos (um por linha: TIPO;codigo — tipos: terminal, periferico, telecom)", t: "area", v: "" },
+  ], async (v) => {
+    const mapa = { terminal: "TERMINAL_COMPUTADOR", periferico: "PERIFERICO", telecom: "EQUIPAMENTO_TELECOM" };
+    const equipamentos = v.itens.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => { const [t, c] = l.split(";"); return { tipo: mapa[t?.trim().toLowerCase()] ?? t?.trim(), codigoBarrasInterno: c?.trim() }; });
+    await api("POST", "/lotes", { organizacaoId: v.organizacaoId, notaFiscal: v.notaFiscal, transportadora: v.transportadora, dataEntrada: v.dataEntrada, equipamentos });
+    toast("Lote criado."); render();
+  });
+};
+window.editarLote = (i) => {
+  const l = __ls[i];
+  form("Editar lote", [{ n: "notaFiscal", l: "Nota fiscal", v: l.notaFiscal, req: 1 }, { n: "transportadora", l: "Transportadora", v: l.transportadora, req: 1 }, { n: "status", l: "Status", opts: opts(STATUS_LOTE, l.status) }],
+    async (v) => { await api("PATCH", "/lotes/" + l.id, { versao: l.versao, ...v }); toast("Lote atualizado."); render(); });
+};
+window.verLote = tenta(async (id) => {
+  const l = await api("GET", "/lotes/" + id);
+  $("#root .content").innerHTML = h`<div class="row"><button class="btn sec sm" onclick="render()">← Lotes</button></div><h2>Lote ${l.notaFiscal}</h2><p class="mut">${l.organizacao.razaoSocial} · entrada ${fmt(l.dataEntrada)}</p>
+    <table><tr><th>Código</th><th>Tipo</th><th>Estado</th><th>Status</th><th></th></tr>${raw(l.equipamentos.map((e) => h`<tr><td>${e.codigoBarrasInterno}</td><td>${nome(e.tipo)}</td><td>${ESTADOS[e.estadoFisico]}</td><td><span class="tag">${nome(e.status)}</span></td><td><button class="btn sm sec" onclick="verEquip('${e.id}')">Detalhe</button></td></tr>`).join(""))}</table>`;
+});
+window.verEquip = tenta(async (id) => {
+  const e = await api("GET", "/equipamentos/" + id); window.__eq = e;
+  const w = pode("lote");
+  const linha = [...e.movimentacoes.map((m) => ({ t: m.criadoEm, x: `${nome(m.statusAnterior)} → ${nome(m.statusNovo)}${m.observacao ? " — " + m.observacao : ""}` })),
+    ...e.historico.map((s) => ({ t: s.criadoEm, x: `estado ${ESTADOS[s.estadoAnterior]} → ${ESTADOS[s.estadoNovo]}${s.justificativa ? " — " + s.justificativa : ""}` }))].sort((a, b) => a.t.localeCompare(b.t));
+  $("#root .content").innerHTML = h`<div class="row"><button class="btn sec sm" onclick="verLote('${e.loteId}')">← Lote</button></div><h2>${e.codigoBarrasInterno}</h2>
+    <div class="cards"><div class="card"><div class="mut">Tipo</div>${nome(e.tipo)}</div><div class="card"><div class="mut">Estado físico</div>${ESTADOS[e.estadoFisico]}</div><div class="card"><div class="mut">Status</div>${nome(e.status)}</div>
+    <div class="card"><div class="mut">Potencial de recuperação</div><div class="big">${Math.round(e.potencialRecuperacao * 100)}%</div></div></div>
+    <p class="mut">Componentes recuperáveis: ${e.componentesRecuperaveis.join(", ")}</p>
+    ${raw(w ? `<div class="row"><button class="btn" onclick="triar()">Registrar triagem</button><button class="btn sec" onclick="mover()">Mover status</button><button class="btn sec" onclick="editarEquip()">Editar cadastro</button></div>` : "")}
+    <h3>Linha do tempo</h3><div class="tl">${raw(linha.map((l) => h`<div><span class="mut">${new Date(l.t).toLocaleString("pt-BR")}</span><br>${l.x}</div>`).join("") || "<span class='mut'>Sem eventos.</span>")}</div>`;
+});
+window.triar = () => form("Triagem", [{ n: "estadoFisico", l: "Estado físico observado", opts: ESTADOS.map((s, i) => `<option value="${i}">${s}</option>`).join("") }, { n: "justificativa", l: "Justificativa (obrigatória se piorar mais de 1 nível)", t: "area" }],
+  async (v) => { await api("POST", `/equipamentos/${__eq.id}/triagem`, { versao: __eq.versao, estadoFisico: +v.estadoFisico, justificativa: v.justificativa || undefined }); toast("Triagem registrada."); verEquip(__eq.id); });
+window.mover = () => form("Mover status", [{ n: "status", l: "Novo status", opts: opts(STATUS_EQ, __eq.status) }, { n: "observacao", l: "Observação", t: "area" }],
+  async (v) => { await api("POST", `/equipamentos/${__eq.id}/movimentacao`, { versao: __eq.versao, status: v.status, observacao: v.observacao || undefined }); toast("Movimentado."); verEquip(__eq.id); });
+window.editarEquip = () => form("Editar cadastro", [{ n: "codigoBarrasInterno", l: "Código de barras", v: __eq.codigoBarrasInterno, req: 1 }],
+  async (v) => { await api("PATCH", "/equipamentos/" + __eq.id, { versao: __eq.versao, codigoBarrasInterno: v.codigoBarrasInterno }); toast("Atualizado."); verEquip(__eq.id); });
+
+window.salvarConfig = tenta(async () => { await api("PUT", "/config", { aliquotaImpostos: +$("#aliq").value, coeficienteDepreciacao: +$("#depr").value }); toast("Salvo."); });
+window.salvarPerfil = tenta(async () => {
+  const c = { versao: __me.versao, nome: $("#pn").value, email: $("#pe").value || null };
+  if ($("#pns").value) { c.senhaAtual = $("#ps").value; c.novaSenha = $("#pns").value; }
+  const m = await api("PATCH", "/me", c); sessao.usuario.nome = m.nome; localStorage.setItem("gc", JSON.stringify(sessao)); toast("Perfil atualizado."); render();
+});
+
+// ---------- shell ----------
+const MENU = [["painel", "Painel", null], ["organizacoes", "Organizações", ["org", "org-leitura"]], ["lotes", "Lotes", ["lote", "auditoria"]], ["relatorio", "Relatório", ["relatorio"]],
+  ["auditoria", "Auditoria", ["auditoria"]], ["usuarios", "Usuários", ["usuario"]], ["config", "Parâmetros", ["config"]], ["perfil", "Meu perfil", null]];
+
+async function render() {
+  const root = $("#root");
+  if (!sessao) {
+    root.innerHTML = `<form class="card login"><h1 style="color:var(--ac)">greencode</h1><label>Usuário</label><input name="u" autofocus required><label>Senha</label><input name="s" type="password" required><div class="row" style="margin-top:16px"><button class="btn grow">Entrar</button></div></form>`;
+    root.querySelector("form").onsubmit = tenta(async (ev) => {
+      ev.preventDefault();
+      sessao = await api("POST", "/auth/login", { username: ev.target.u.value, senha: ev.target.s.value });
+      localStorage.setItem("gc", JSON.stringify(sessao)); location.hash = "#painel"; render();
+    });
+    return;
+  }
+  const rota = (location.hash.slice(1) || "painel");
+  const visivel = MENU.filter(([, , p]) => !p || pode(...p));
+  root.innerHTML = h`<div class="app"><nav><h1>♻ greencode</h1>${raw(visivel.map(([k, t]) => `<a href="#${k}" class="${k === rota ? "on" : ""}">${t}</a>`).join(""))}
+    <div class="eu">${sessao.usuario.nome}<br>${PAPEIS[sessao.usuario.papel]}<br><a onclick="sair()">Sair</a></div></nav><main class="content"></main></div>`;
+  try { $(".content").innerHTML = await (paginas[rota] || paginas.painel)(); } catch (e) { $(".content").innerHTML = `<p class="mut">${esc(e.message)}</p>`; }
+}
+addEventListener("hashchange", render);
+render();
+</script>
+</body>
+</html>

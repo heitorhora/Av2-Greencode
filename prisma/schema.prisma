@@ -1,0 +1,157 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Papel {
+  ADMINISTRADOR
+  OPERADOR_CADASTRO
+  GESTOR_ALMOXARIFADO
+  AUDITOR
+}
+
+enum StatusLote {
+  RECEBIDO
+  EM_TRIAGEM
+  TRIAGEM_CONCLUIDA
+  FINALIZADO
+}
+
+enum StatusEquipamento {
+  AGUARDANDO_TRIAGEM
+  TRIADO
+  DESMONTE
+  RECICLAGEM
+  DESCARTE_SEGURO
+}
+
+enum TipoEquipamento {
+  TERMINAL_COMPUTADOR
+  PERIFERICO
+  EQUIPAMENTO_TELECOM
+}
+
+// versao: controle de concorrencia otimista (update so vale se a versao lida ainda e a atual)
+model Usuario {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  nome         String
+  email        String?  @unique
+  hashSenha    String
+  papel        Papel
+  ativo        Boolean  @default(true)
+  versao       Int      @default(1)
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+  auditorias   Auditoria[]
+  movimentacoes Movimentacao[]
+  historicos   HistoricoEstado[]
+}
+
+model Organizacao {
+  id           String    @id @default(uuid())
+  cnpj         String    @unique @db.VarChar(14)
+  razaoSocial  String
+  segmento     String
+  versao       Int       @default(1)
+  criadoEm     DateTime  @default(now())
+  atualizadoEm DateTime  @updatedAt
+  contrato     Contrato?
+  lotes        Lote[]
+}
+
+model Contrato {
+  id             String      @id @default(uuid())
+  numero         String      @unique
+  vigenciaInicio DateTime
+  vigenciaFim    DateTime
+  clausulas      Json        @default("{}")
+  organizacaoId  String      @unique
+  organizacao    Organizacao @relation(fields: [organizacaoId], references: [id], onDelete: Cascade)
+}
+
+model Lote {
+  id             String        @id @default(uuid())
+  notaFiscal     String
+  transportadora String
+  dataEntrada    DateTime
+  status         StatusLote    @default(RECEBIDO)
+  versao         Int           @default(1)
+  criadoEm       DateTime      @default(now())
+  organizacaoId  String
+  organizacao    Organizacao   @relation(fields: [organizacaoId], references: [id])
+  equipamentos   Equipamento[]
+
+  @@index([organizacaoId])
+}
+
+model Equipamento {
+  id             String            @id @default(uuid())
+  codigoBarrasInterno String            @unique
+  tipo           TipoEquipamento
+  // 0 NOVO, 1 BOM, 2 REGULAR, 3 RUIM, 4 INSERVIVEL; CHECK em migration SQL (ver README)
+  estadoFisico   Int               @default(0)
+  status         StatusEquipamento @default(AGUARDANDO_TRIAGEM)
+  atributos      Json              @default("{}")
+  versao         Int               @default(1)
+  criadoEm       DateTime          @default(now())
+  loteId         String
+  lote           Lote              @relation(fields: [loteId], references: [id])
+  movimentacoes  Movimentacao[]
+  historico      HistoricoEstado[]
+
+  @@index([loteId])
+  @@index([status])
+}
+
+model Movimentacao {
+  id             String            @id @default(uuid())
+  equipamentoId  String
+  equipamento    Equipamento       @relation(fields: [equipamentoId], references: [id], onDelete: Cascade)
+  statusAnterior StatusEquipamento
+  statusNovo     StatusEquipamento
+  observacao     String?
+  usuarioId      String
+  usuario        Usuario           @relation(fields: [usuarioId], references: [id])
+  criadoEm       DateTime          @default(now())
+
+  @@index([equipamentoId])
+}
+
+model HistoricoEstado {
+  id             String      @id @default(uuid())
+  equipamentoId  String
+  equipamento    Equipamento @relation(fields: [equipamentoId], references: [id], onDelete: Cascade)
+  estadoAnterior Int
+  estadoNovo     Int
+  justificativa  String?
+  usuarioId      String
+  usuario        Usuario     @relation(fields: [usuarioId], references: [id])
+  criadoEm       DateTime    @default(now())
+}
+
+model Auditoria {
+  id         String   @id @default(uuid())
+  usuarioId  String?
+  usuario    Usuario? @relation(fields: [usuarioId], references: [id], onDelete: SetNull)
+  acao       String
+  entidade   String
+  entidadeId String
+  detalhe    Json?
+  criadoEm   DateTime @default(now())
+
+  @@index([entidade, entidadeId])
+  @@index([criadoEm])
+}
+
+// linha unica (id = 1): parametros globais editaveis pelo administrador
+model Parametro {
+  id                     Int      @id @default(1)
+  aliquotaImpostos       Float    @default(0)
+  coeficienteDepreciacao Float    @default(20)
+  atualizadoEm           DateTime @updatedAt
+}
